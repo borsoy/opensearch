@@ -1,0 +1,224 @@
+В данной статье я буду обновлять кластер из 3-х нод + Opensearch Dashboards
+
+Вводные данные:
+
+Ноды: kraz-s-meselk01; kraz-s-meselk02; kraz-s-meselk03; c IP адресами: 192.168.1.85; 192.168.1.86; 192.168.1.87 соответственно.
+
+Opensearch Dashboards: kraz-s-mesapp01 с адресом: http://192.168.1.88:5601/
+
+Текущая версия: 2.16
+
+Целевая версия: 2.19
+
+Операционная система: Oracle Linux 8.9
+
+Opensearh установлен ansible-playbook-ом, путем распаковки архива tar.gz, затем сконфигурирован.
+
+Определите мастера
+
+Важно! Проверьте свой кластер и определите первый узел для обновления. Master узлы управления кластером должны быть обновлены последними, поскольку узлы OpenSearch могут присоединиться к кластеру с узлами управления, работающими на более старой версии, но они не могут присоединиться к кластеру, где все узлы управления работают на более новой версии.
+
+Обновление кластера Opensearch
+Шаг 1. Снэпшот.
+Обязательно сделайте снапшот (самой ВМ, либо кластера через запрос curl)
+
+Шаг 2. Отключите репликацию шарда.
+Отключите репликацию шарда, чтобы предотвратить создание реплик шарда во время перевода узлов в автономный режим. Это остановит перемещение сегментов индекса Lucene на узлах в вашем кластере. Вы можете отключить репликацию шарда, запросив _cluster/settingsконечную точку API:
+
+curl -X PUT "https://kraz-s-meselk01:9200/_cluster/settings?pretty" \
+     -H "Content-Type: application/json" \
+     -d '{
+         "persistent": {
+             "cluster.routing.allocation.enable": "primaries"
+         }
+     }' \
+     --cert /var/lib/opensearch/config/admin.pem \
+     --key /var/lib/opensearch/config/admin.key -k
+Ответ должен выглядеть примерно так, как показано в следующем примере:
+
+{
+  "acknowledged" : true,
+  "persistent" : {
+    "cluster" : {
+      "routing" : {
+        "allocation" : {
+          "enable" : "primaries"
+        }
+      }
+    }
+  },
+  "transient" : { }
+}
+Шаг 3.  Очитска класттера
+Выполните операцию очистки кластера, чтобы зафиксировать записи журнала транзакций в индексе Lucene:
+
+curl -X POST "https://kraz-s-meselk01:9200/_flush?pretty" \
+--cert /var/lib/opensearch/config/admin.pem \
+--key /var/lib/opensearch/config/admin.key -k
+Ответ должен выглядеть примерно так, как показано в следующем примере:
+
+{
+  "_shards" : {
+    "total" : 4,
+    "successful" : 4,
+    "failed" : 0
+  }
+}
+Шаг 4. Определение Мастера
+Запросите _cat/nodes конечную точку, чтобы определить, какой узел был повышен до менеджера кластера. Следующая команда включает дополнительные параметры запроса, которые запрашивают только имя, версию, node.role и заголовки master. Обратите внимание, что версии OpenSearch 1.x используют термин «master», который устарел и заменен на «cluster_manager» в OpenSearch 2.x и более поздних версиях.
+
+curl -XGET "https://kraz-s-meselk01:9200/_cat/nodes?v&h=name,version,node.role,master" -u "admin:admin" --insecure | column -t
+Ответ должен выглядеть примерно так, как показано в следующем примере:
+
+name             version  node.role  master
+kraz-s-meselk02  2.16.0   dm         -
+kraz-s-meselk03  2.16.0   dm         *
+kraz-s-meselk01  2.19.0   dm         -
+Шаг 5. Обновление узла
+Шаг 5.1 Остановка узла.
+Остановите обновляемый узел.
+
+systemctl stop opensearch
+Шаг 5.2. Проверка
+Проверьте, что связанный узел был исключен из кластера, запросив _cat/nodes конечную точку API: (с рабочей ноды)
+
+curl -XGET "https://kraz-s-meselk02:9200/_cat/nodes?v&h=name,version,node.role,master" -u "admin:admin" --insecure | column -t
+Должна пропасть отключенная нода
+
+Шаг. 5.3. Перенос старого Opensearch
+Перенесите всю папку Opensearh в заранее подготовленное место для бэкапа. Я, например, перенес в /opt/opensearch. А установлен он у меня в /var/lib/opensearch
+
+Шаг 5.4 Скачайте актуальную версию
+
+Загрузите актуальную версию отсюда: https://opensearch.org/downloads.html
+
+5.5 Распакова
+Распакуйте архив
+
+tar -xvzf opensearch-2.19.0-linux-x64.tar.gz
+
+и перенесите в папку, где был старый opensearch
+
+mv /opt/opensearch /var/lib/opensearch
+Установите нужные права:
+
+chown -R opensearch:opensearch /var/lib/opensearch
+5.6 Копирование конфигов и сертификатов:
+Скопируйте следующие папки/файлы из бэкапа в новую папку:
+
+Из папки /opt/opensearch/config/ в папку /var/lib/opensearch//config следующие файлы:
+admin.key
+opensearch.yml
+admin.pem
+jvm.options
+kraz-s-meselk01_http.key
+root-ca.key
+kraz-s-meselk01_http.pem
+root-ca.pem
+kraz-s-meselk01.key
+kraz-s-meselk01.pem
+Перенесите все файлы из папки /opt/opensearch/config/opensearch-security/ в папку /var/lib/opensearch/config/opensearch-security/
+Проверьте, что все права сохранились. Если нет, переназначьте на пользователя opensearch
+
+Скопируйте папку /opt/opensearch/data в /var/lib/opensearch. Там хранятся сохраненные индексы.
+5.7. Запустите сервис
+systemctl start opensearch
+Шаг 6. Проверка версионности ноды
+Опять запосите список нод:
+
+curl -XGET "https://kraz-s-meselk02:9200/_cat/nodes?v&h=name,version,node.role,master" -u "admin:admin" --insecure | column -t
+Вы должны увидеть, что нода в кластере имеет свежую версию:
+
+name             version  node.role  master
+kraz-s-meselk02  2.16.0   dm         -
+kraz-s-meselk03  2.16.0   dm         *
+kraz-s-meselk01  2.19.0   dm         -
+Шаг 7. Обновите другие ноды
+По такому же принципу обновите следующие ноды. Помните, что нода master дожна обновляться последней.
+
+Шаг 8 Повторно включить репликацию шардов:
+curl -X PUT "https://kraz-s-meselk01:9200/_cluster/settings?pretty" \
+     -H "Content-Type: application/json" \
+     -d '{
+         "persistent": {
+             "cluster.routing.allocation.enable": "all"
+         }
+     }' \
+     --cert /var/lib/opensearch/config/admin.pem \
+     --key /var/lib/opensearch/config/admin.key -k
+
+
+Ответ должен выглядеть примерно так, как показано в следующем примере:
+
+
+
+{
+  "acknowledged" : true,
+  "persistent" : {
+    "cluster" : {
+      "routing" : {
+        "allocation" : {
+          "enable" : "all"
+        }
+      }
+    }
+  },
+  "transient" : { }
+}
+Шаг 9. Проверьете состояние кластера:
+
+Выполните команду:
+
+curl -X GET https://kraz-s-meselk01:9200/_cluster/health?pretty -u 'admin:admin' --insecure
+Ответ должен быть примерно такой:
+
+{
+  "cluster_name" : "development-cluster",
+  "status" : "red",
+  "timed_out" : false,
+  "number_of_nodes" : 3,
+  "number_of_data_nodes" : 3,
+  "discovered_master" : true,
+  "discovered_cluster_manager" : true,
+  "active_primary_shards" : 9,
+  "active_shards" : 23,
+  "relocating_shards" : 0,
+  "initializing_shards" : 0,
+  "unassigned_shards" : 4,
+  "delayed_unassigned_shards" : 0,
+  "number_of_pending_tasks" : 0,
+  "number_of_in_flight_fetch" : 0,
+  "task_max_waiting_in_queue_millis" : 0,
+  "active_shards_percent_as_number" : 85.18518518518519
+}
+Обновление Opensearch Dashboards
+Шаг 1. Загрузка актуальной версии
+Загрузите актуальную версию Opensearch Dashboards отсюда: https://opensearch.org/downloads.html. Я загрузил в папку /tmp
+
+Шаг 2. Бэкап
+Скопируйте папку /usr/share/opensearch-dashboards/config куда-нибудь. Я скопирую в папку /opt
+
+cp /usr/share/opensearch-dashboards/config /opt
+Шаг 3. Остановите сервис
+systemctl stop dashboards
+Шаг 4. Удаление старой версии
+Удалите содержимое папки /usr/share/opensearch-dashboards
+
+rm -Rf /usr/share/opensearch-dashboards/*
+Шаг 4. Распаковка архива
+Распакуйте архив:
+
+
+
+cd /tmp
+tar -xzf opensearch-dashboards-2.19.0-linux-x64.tar.gz --strip-components=1 -C /usr/share/opensearch-dashboards
+Шаг 5. Восстановление конфигов:
+Скопируйте в новую папку /opt/config
+
+rsync -av --delete /opt/config/ /home/user/destination//usr/share/opensearch-dashboards/config
+Шаг 6. Запустите сервис
+systemctl start dashboards
+Шаг 7. Проверка
+Войдите в веб-интерфейс вашего Opensearch Dashboards. У меня это http://192.168.1.88:5601/
+
+Убедитесь, что версия изменилась:
