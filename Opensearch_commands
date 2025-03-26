@@ -1,0 +1,33 @@
+Состояние кластера:
+
+curl -X GET https://kraz-s-meselk01:9200/_cluster/health?pretty -u 'admin:Nsa#72rgs!' --insecure
+admin - имя пользователя, 
+
+Nsa#72rgs! - пароль
+
+
+проверить мастера кластера
+
+curl -X GET "https://kraz-s-meselk01:9200/_cat/master?pretty" -u "admin:Nsa#72rgs!" -k --insecure
+запросить роли пользователей
+
+curl -XGET "http://kraz-s-meselk01:9200/_plugins/_security/api/account" -u "admin:Nsa#72rgs!" -k --insecure
+список нод
+
+curl -XGET https://kraz-s-meselk01:9200/_cat/nodes?v -u 'admin:Nsa#72rgs!' --insecure
+Удалить индекс
+
+curl -DELETE https://kraz-s-meselk01:9200/_cat/indices/*.kibana* -u 'admin:Nsa#72rgs!' --insecure
+Показать индексы и их размер по паттерну mes (имя индекса начинается с mes)
+
+curl -X GET "http://localhost:9200/_cat/indices/mes*?v&s=store.size:desc&h=index,pri,rep,store.size,pri.store.size" -u 'admin:Nsa#72rgs!' --insecure
+Вывод:
+
+index           pri rep store.size pri.store.size
+mes_big_index     5   1     50gb         25gb
+mes_medium_index  3   1     20gb         10gb
+mes_small_index   1   1      5gb          5gb
+Примечание:
+
+- `store.size` — общий размер индекса с учетом реплик.
+- `pri.store.size` — размер только первичных шардов (без учета реплик).
